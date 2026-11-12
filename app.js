@@ -581,6 +581,41 @@ function pinPress(k) {
 
 let pTab = 'acts';
 let editing = null; // copia de la actividad que se está editando
+let editingOrig = ''; // cómo estaba al empezar a editar, para detectar cambios sin guardar
+
+function startEditing(a) {
+  editing = a;
+  editingOrig = JSON.stringify(a);
+}
+
+function saveEditing() {
+  if (!editing.name.trim()) { toast('Falta el nombre'); return false; }
+  if (!editing.time) { toast('Falta la hora'); return false; }
+  if (editing.repeat === 'once' && !editing.date) { toast('Falta la fecha'); return false; }
+  if (editing.repeat !== 'once' && !editing.days.length) { toast('Elegí al menos un día'); return false; }
+  editing.name = editing.name.trim();
+  const i = state.activities.findIndex(a => a.id === editing.id);
+  if (i >= 0) state.activities[i] = editing; else state.activities.push(editing);
+  // Si cambió la hora, que los avisos de hoy se puedan volver a disparar
+  for (const k of Object.keys(state.fired)) if (k.startsWith(editing.id + '|')) delete state.fired[k];
+  save();
+  editing = null;
+  toast('Guardado');
+  return true;
+}
+
+// Antes de salir de una actividad en edición: si hay cambios, preguntar si se guardan.
+// Devuelve false si hay que quedarse (por ejemplo, falta un dato para poder guardar).
+function leaveEditing() {
+  if (!editing) return true;
+  if (JSON.stringify(editing) !== editingOrig) {
+    if (confirm(`Hay cambios sin guardar en “${editing.name || 'la actividad'}”.\n\nAceptar: guardarlos.\nCancelar: descartarlos.`)) {
+      return saveEditing();
+    }
+  }
+  editing = null;
+  return true;
+}
 
 function openParent() {
   $('#parent').hidden = false;
@@ -588,6 +623,7 @@ function openParent() {
   renderParent();
 }
 function closeParent() {
+  if (!leaveEditing()) return;
   $('#parent').hidden = true;
   editing = null;
   renderKid();
@@ -667,7 +703,7 @@ function actForm() {
         </div>
         <small>Las marcadas “siempre” se agregan a todas las actividades. Se cambian en “Cosas para llevar”.</small>
       </fieldset>
-      <div class="btn-row">
+      <div class="btn-row save-bar">
         <button class="btn primary" data-do="save-act">Guardar</button>
         <button class="btn" data-do="cancel-act">Cancelar</button>
       </div>
@@ -757,8 +793,8 @@ function onParentClick(ev) {
   if (!b || b.disabled) return;
   const id = b.dataset.id;
   switch (b.dataset.do) {
-    case 'new-act': editing = newActivity(); renderParent(); break;
-    case 'edit-act': editing = structuredClone(state.activities.find(a => a.id === id)); renderParent(); break;
+    case 'new-act': startEditing(newActivity()); renderParent(); break;
+    case 'edit-act': startEditing(structuredClone(state.activities.find(a => a.id === id))); renderParent(); break;
     case 'cancel-act': editing = null; renderParent(); break;
     case 'repeat': editing.repeat = b.dataset.v; renderParent(); break;
     case 'day': {
@@ -779,19 +815,9 @@ function onParentClick(ev) {
       break;
     }
     case 'pick-act-pic': openPicker(p => { editing.pic = p; renderParent(); }, editing.name); break;
-    case 'save-act': {
-      if (!editing.name.trim()) return toast('Falta el nombre');
-      if (!editing.time) return toast('Falta la hora');
-      if (editing.repeat === 'once' && !editing.date) return toast('Falta la fecha');
-      if (editing.repeat !== 'once' && !editing.days.length) return toast('Elegí al menos un día');
-      editing.name = editing.name.trim();
-      const i = state.activities.findIndex(a => a.id === editing.id);
-      if (i >= 0) state.activities[i] = editing; else state.activities.push(editing);
-      // Si cambió la hora, que los avisos de hoy se puedan volver a disparar
-      for (const k of Object.keys(state.fired)) if (k.startsWith(editing.id + '|')) delete state.fired[k];
-      save(); editing = null; renderParent(); toast('Guardado');
+    case 'save-act':
+      if (saveEditing()) renderParent();
       break;
-    }
     case 'del-act':
       if (!confirm(`¿Eliminar “${editing.name}”?`)) return;
       state.activities = state.activities.filter(a => a.id !== editing.id);
@@ -1042,7 +1068,7 @@ function bind() {
 
   // Padres
   $('#pClose').addEventListener('click', closeParent);
-  $$('.p-tabs button').forEach(b => b.addEventListener('click', () => { pTab = b.dataset.tab; editing = null; renderParent(); }));
+  $$('.p-tabs button').forEach(b => b.addEventListener('click', () => { if (!leaveEditing()) return; pTab = b.dataset.tab; renderParent(); }));
   $('#pBody').addEventListener('click', onParentClick);
   $('#pBody').addEventListener('input', onParentInput);
   $('#pBody').addEventListener('change', e => { if (e.target.type === 'checkbox' || e.target.type === 'file' || e.target.tagName === 'SELECT') onParentInput(e); });
