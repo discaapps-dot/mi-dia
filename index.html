@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#FFF6EA">
+  <title>Mi Día</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <!-- ===== Pantalla de él ===== -->
+  <div id="kid" class="kid">
+    <header class="kid-top">
+      <button id="dateBtn" class="date-btn" aria-label="Escuchar qué día es hoy">
+        <span id="greeting" class="greeting"></span>
+        <span id="dateText" class="date-text"></span>
+      </button>
+      <button id="parentBtn" class="gear" aria-label="Modo padres: mantener apretado">
+        <svg viewBox="0 0 36 36" class="gear-ring" aria-hidden="true"><circle cx="18" cy="18" r="16"/></svg>
+        <span aria-hidden="true">⚙️</span>
+      </button>
+    </header>
+
+    <main class="kid-main">
+      <button id="nextCard" class="next-card" aria-live="polite"></button>
+      <section class="today">
+        <div class="today-head" aria-hidden="true">📅</div>
+        <div id="todayStrip" class="strip"></div>
+      </section>
+      <section id="answer" class="answer" hidden aria-live="polite"></section>
+    </main>
+
+    <footer class="kid-bottom">
+      <button class="quick" data-q="hoy" aria-label="¿Qué tengo hoy?"><span>📅</span></button>
+      <button class="quick" data-q="sigue" aria-label="¿Qué sigue?"><span>➡️</span></button>
+      <button id="micBtn" class="mic" aria-label="Hablar"><span>🎤</span></button>
+      <button class="quick" data-q="llevo" aria-label="¿Qué llevo?"><span>🎒</span></button>
+      <button class="quick" data-q="hora" aria-label="¿Qué hora es?"><span>🕐</span></button>
+    </footer>
+  </div>
+
+  <!-- ===== Tocar para empezar (habilita la voz) ===== -->
+  <div id="start" class="overlay start">
+    <button id="startBtn" class="start-btn" aria-label="Empezar">
+      <span class="start-play">▶</span>
+    </button>
+    <p class="start-hint">Tocá para empezar</p>
+  </div>
+
+  <!-- ===== Aviso de alistarse / salir ===== -->
+  <div id="alert" class="overlay alert" hidden role="alertdialog" aria-modal="true"></div>
+
+  <!-- ===== PIN de padres ===== -->
+  <div id="pin" class="overlay pin" hidden role="dialog" aria-modal="true" aria-label="PIN de padres"></div>
+
+  <!-- ===== Modo padres ===== -->
+  <div id="parent" class="parent" hidden>
+    <header class="p-head">
+      <h1>Modo padres</h1>
+      <button id="pClose" class="btn">Volver a su pantalla</button>
+    </header>
+    <nav class="p-tabs" role="tablist">
+      <button data-tab="acts" role="tab">Actividades</button>
+      <button data-tab="items" role="tab">Cosas para llevar</button>
+      <button data-tab="settings" role="tab">Ajustes</button>
+    </nav>
+    <main id="pBody" class="p-body"></main>
+    <footer class="p-foot">Pictogramas: Sergio Palao · ARASAAC (CC BY-NC-SA) · Gobierno de Aragón</footer>
+  </div>
+
+  <!-- ===== Elegir imagen ===== -->
+  <div id="picker" class="overlay picker" hidden role="dialog" aria-modal="true" aria-label="Elegir imagen"></div>
+
+  <div id="toast" class="toast" hidden></div>
+</body>
+</html>
