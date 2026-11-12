@@ -47,6 +47,7 @@ function defaultState() {
       rate: 0.95,
       voiceURI: '',
       wake: true,
+      alerts: true, // este dispositivo muestra los avisos de alistarse/salir
       defaults: { pie: { travel: 10, prep: 20 }, auto: { travel: 20, prep: 15 } },
     },
     items: [
@@ -110,11 +111,11 @@ const SYNC_TEXT = {
 };
 
 function sharedData() {
-  const { voiceURI, rate, wake, ...settings } = state.settings;
+  const { voiceURI, rate, wake, alerts, ...settings } = state.settings;
   return { settings, items: state.items, activities: state.activities };
 }
 function applyShared(d) {
-  const keep = { voiceURI: state.settings.voiceURI, rate: state.settings.rate, wake: state.settings.wake };
+  const keep = { voiceURI: state.settings.voiceURI, rate: state.settings.rate, wake: state.settings.wake, alerts: state.settings.alerts };
   const def = defaultState().settings;
   state.settings = { ...def, ...d.settings, defaults: { ...def.defaults, ...(d.settings || {}).defaults }, ...keep };
   state.items = Array.isArray(d.items) ? d.items : [];
@@ -760,6 +761,7 @@ async function notifyIfHidden(occ, stage) {
 }
 
 function checkSchedule() {
+  if (!state.settings.alerts) return;
   const now = new Date();
   let changed = false;
   for (const o of dayList(now)) {
@@ -999,6 +1001,8 @@ function settingsForm() {
         </fieldset>`).join('')}
 
       <h3>Avisos</h3>
+      <label class="switch"><input type="checkbox" data-s="alerts" ${s.alerts ? 'checked' : ''}> Mostrar los avisos de alistarse y salir en este dispositivo</label>
+      <p class="hint">Dejalo prendido en el celular de él y apagalo en la compu o en el celular de ustedes. Se cambia en cada dispositivo por separado.</p>
       <label class="switch"><input type="checkbox" data-s="wake" ${s.wake ? 'checked' : ''}> Mantener la pantalla encendida mientras la app está abierta</label>
       <p class="hint">Notificaciones: <b>${notif}</b>. En este prototipo los avisos funcionan mientras la app está abierta.</p>
       <div class="btn-row"><button class="btn" data-do="ask-notif">Activar notificaciones</button></div>
@@ -1132,6 +1136,10 @@ function onParentInput(ev) {
     if (k === 'rate') $('#rateVal').textContent = Number(t.value).toFixed(2);
     if (k === 'name') renderKid();
     if (k === 'wake') applyWakeLock();
+    if (k === 'alerts' && !t.checked) {
+      alertQueue.length = 0;
+      if (currentAlert && !currentAlert.test) closeAlert();
+    }
     save();
   } else if (t.dataset.def) {
     const [mode, key] = t.dataset.def.split('.');
