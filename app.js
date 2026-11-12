@@ -80,9 +80,241 @@ function loadState() {
 
 let state = loadState();
 
-function save() {
+function saveLocal() {
   try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
   catch { toast('No se pudo guardar en este dispositivo'); }
+}
+function save() {
+  saveLocal();
+  schedulePush();
+}
+
+/* ---------- Sincronización entre dispositivos (Firebase Firestore) ----------
+   Cada familia tiene un documento familias/{código}. El código es largo y al azar
+   (80 bits): quien no lo tenga no puede leer ni escribir la agenda.
+   Se sincroniza la agenda (actividades, cosas, nombre, PIN, tiempos). La voz, la
+   velocidad y los avisos ya mostrados quedan propios de cada dispositivo. */
+const FB_VER = '10.12.2';
+const SYNC_KEY = 'midia.sync';
+const deviceId = (() => {
+  try {
+    let d = localStorage.getItem('midia.device');
+    if (!d) { d = uid() + uid(); localStorage.setItem('midia.device', d); }
+    return d;
+  } catch { return uid() + uid(); }
+})();
+const sync = { code: null, fs: null, db: null, unsub: null, status: 'off', lastPushed: '', timer: null };
+const SYNC_TEXT = {
+  off: '', connecting: 'Conectando…', ok: '✓ Sincronizado', pending: 'Enviando cambios…',
+  error: '⚠ Sin conexión. Los cambios se envían cuando vuelva internet.', missing: '⚠ No se encontró la agenda compartida. Revisá el código.',
+};
+
+function sharedData() {
+  const { voiceURI, rate, wake, ...settings } = state.settings;
+  return { settings, items: state.items, activities: state.activities };
+}
+function applyShared(d) {
+  const keep = { voiceURI: state.settings.voiceURI, rate: state.settings.rate, wake: state.settings.wake };
+  const def = defaultState().settings;
+  state.settings = { ...def, ...d.settings, defaults: { ...def.defaults, ...(d.settings || {}).defaults }, ...keep };
+  state.items = Array.isArray(d.items) ? d.items : [];
+  state.activities = Array.isArray(d.activities) ? d.activities : [];
+}
+
+function genCode() {
+  const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sin 0/O ni 1/I para no confundir
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return [...bytes].map((b, i) => abc[b % 32] + (i % 4 === 3 && i < 15 ? '-' : '')).join('');
+}
+function cleanCode(c) {
+  const s = String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return s.length === 16 ? s.match(/.{4}/g).join('-') : null;
+}
+const joinLink = code => `${location.origin}${location.pathname}#unir=${code}`;
+
+async function fbInit() {
+  if (sync.fs) return true;
+  if (!window.FIREBASE_CONFIG) return false;
+  try {
+    const [appMod, fs] = await Promise.all([
+      import(`https://www.gstatic.com/firebasejs/${FB_VER}/firebase-app.js`),
+      import(`https://www.gstatic.com/firebasejs/${FB_VER}/firebase-firestore.js`),
+    ]);
+    sync.db = fs.getFirestore(appMod.initializeApp(window.FIREBASE_CONFIG));
+    sync.fs = fs;
+    return true;
+  } catch (e) { console.warn('Firebase', e); return false; }
+}
+const famDoc = () => sync.fs.doc(sync.db, 'familias', sync.code);
+
+function setSyncStatus(s) {
+  sync.status = s;
+  const el = $('#syncStatus');
+  if (el) el.textContent = SYNC_TEXT[s] || '';
+}
+
+function schedulePush() {
+  if (!sync.code || !sync.fs) return;
+  clearTimeout(sync.timer);
+  sync.timer = setTimeout(pushNow, 800);
+}
+async function pushNow() {
+  clearTimeout(sync.timer);
+  if (!sync.code || !sync.fs) return;
+  const data = JSON.stringify(sharedData());
+  if (data === sync.lastPushed) return;
+  if (data.length > 900000) { toast('La agenda es muy grande para sincronizar. Probá con menos fotos.'); return; }
+  sync.lastPushed = data;
+  setSyncStatus('pending');
+  try {
+    await sync.fs.setDoc(famDoc(), { data, by: deviceId, at: sync.fs.serverTimestamp() });
+    setSyncStatus('ok');
+  } catch (e) {
+    console.warn('sync push', e);
+    sync.lastPushed = '';
+    setSyncStatus('error');
+  }
+}
+
+function listenSync() {
+  sync.unsub?.();
+  sync.unsub = sync.fs.onSnapshot(famDoc(), snap => {
+    if (!snap.exists()) { if (!snap.metadata.hasPendingWrites) setSyncStatus('missing'); return; }
+    const d = snap.data();
+    if (d.by !== deviceId && typeof d.data === 'string' && d.data !== sync.lastPushed) {
+      try {
+        applyShared(JSON.parse(d.data));
+        sync.lastPushed = d.data;
+        saveLocal();
+        renderKid();
+        if (!$('#parent').hidden && !editing) renderParent();
+        toast('Agenda actualizada');
+      } catch (e) { console.warn('sync apply', e); }
+    }
+    setSyncStatus(snap.metadata.hasPendingWrites ? 'pending' : 'ok');
+  }, e => { console.warn('sync listen', e); setSyncStatus('error'); });
+}
+
+function rememberCode(code) {
+  sync.code = code;
+  try { code ? localStorage.setItem(SYNC_KEY, code) : localStorage.removeItem(SYNC_KEY); } catch { /* */ }
+}
+
+// Este dispositivo crea la agenda compartida y sube lo que tiene.
+async function createFamily() {
+  setSyncStatus('connecting');
+  if (!(await fbInit())) { setSyncStatus('error'); return toast('No se pudo conectar'); }
+  rememberCode(genCode());
+  sync.lastPushed = '';
+  await pushNow();
+  listenSync();
+  renderParent();
+}
+
+// Este dispositivo se une a una agenda compartida existente (reemplaza la suya).
+async function joinFamily(raw) {
+  const code = cleanCode(raw);
+  if (!code) return toast('El código tiene 16 letras y números');
+  setSyncStatus('connecting');
+  if (!(await fbInit())) { setSyncStatus('error'); return toast('No se pudo conectar'); }
+  let snap;
+  try { snap = await sync.fs.getDoc(sync.fs.doc(sync.db, 'familias', code)); }
+  catch (e) { console.warn(e); setSyncStatus('error'); return toast('No se pudo conectar. Revisá internet.'); }
+  if (!snap.exists()) { setSyncStatus('off'); return toast('No existe una agenda con ese código'); }
+  if (!confirm('La agenda de este dispositivo se va a reemplazar por la agenda compartida. ¿Seguir?')) { setSyncStatus('off'); return; }
+  const d = snap.data();
+  applyShared(JSON.parse(d.data));
+  sync.lastPushed = d.data;
+  saveLocal();
+  rememberCode(code);
+  listenSync();
+  renderKid();
+  if (!$('#parent').hidden) renderParent();
+  toast('¡Listo! Este dispositivo quedó sincronizado');
+}
+
+function leaveFamily() {
+  if (!confirm('Este dispositivo deja de sincronizarse. La agenda queda guardada acá, pero los cambios ya no se comparten. ¿Seguir?')) return;
+  sync.unsub?.(); sync.unsub = null;
+  rememberCode(null);
+  setSyncStatus('off');
+  renderParent();
+}
+
+async function resumeSync() {
+  let code = null;
+  try { code = localStorage.getItem(SYNC_KEY); } catch { /* */ }
+  if (!code || !window.FIREBASE_CONFIG) return;
+  sync.code = code;
+  setSyncStatus('connecting');
+  if (!(await fbInit())) return setSyncStatus('error');
+  listenSync();
+}
+
+// Abrir el link de invitación (por ejemplo, escaneando el QR) une este dispositivo.
+function handleJoinLink() {
+  const m = location.hash.match(/^#unir=([A-Za-z0-9-]+)/);
+  if (!m) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  const code = cleanCode(m[1]);
+  if (!code || code === sync.code) return;
+  joinFamily(code);
+}
+
+let qrLoading = null;
+function loadQRLib() {
+  if (window.QRCode) return Promise.resolve();
+  return qrLoading || (qrLoading = new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
+    s.onload = res; s.onerror = rej;
+    document.head.appendChild(s);
+  }));
+}
+async function drawQR() {
+  const box = $('#syncQR');
+  if (!box || !sync.code) return;
+  try {
+    await loadQRLib();
+    box.innerHTML = '';
+    new window.QRCode(box, { text: joinLink(sync.code), width: 180, height: 180, correctLevel: window.QRCode.CorrectLevel.M });
+  } catch { box.innerHTML = '<p class="hint">No se pudo dibujar el QR. Usá el código o el link.</p>'; }
+}
+
+function syncSection() {
+  if (!window.FIREBASE_CONFIG) {
+    return `<p class="hint">La sincronización todavía no está configurada. Mientras tanto, usá “Guardar archivo” y “Cargar archivo”.</p>`;
+  }
+  if (!sync.code) {
+    return `
+      <p class="hint">Así la agenda que cargan en la compu aparece sola en su celular, y al revés.</p>
+      <div class="sync-box">
+        <b>¿Es el primer dispositivo?</b>
+        <span class="hint">Se crea la agenda compartida con lo que hay cargado en este dispositivo.</span>
+        <div class="btn-row"><button class="btn primary" data-do="sync-create">Crear agenda compartida</button></div>
+      </div>
+      <div class="sync-box">
+        <b>¿Ya la crearon en otro dispositivo?</b>
+        <span class="hint">Escaneá el QR que aparece allá con la cámara, o escribí el código.</span>
+        <div class="picker-search">
+          <input type="text" id="joinCode" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false">
+          <button class="btn primary" data-do="sync-join">Unirme</button>
+        </div>
+      </div>`;
+  }
+  return `
+    <div class="sync-box">
+      <span id="syncStatus" class="sync-status">${esc(SYNC_TEXT[sync.status] || '')}</span>
+      <span class="hint">Código familiar:</span>
+      <code class="sync-code">${esc(sync.code)}</code>
+      <span class="hint">Para sumar otro dispositivo: escaneá este QR con su cámara, o abrí el link en él.</span>
+      <div id="syncQR" class="sync-qr"></div>
+      <div class="btn-row">
+        <button class="btn" data-do="sync-copy">Copiar link</button>
+        <button class="btn danger" data-do="sync-leave">Dejar de sincronizar</button>
+      </div>
+      <span class="hint">No compartas este código con nadie fuera de la familia: con él se puede ver y cambiar la agenda.</span>
+    </div>`;
 }
 
 function pruneOld() {
@@ -634,7 +866,7 @@ function renderParent() {
   const body = $('#pBody');
   if (pTab === 'acts') body.innerHTML = editing ? actForm() : actList();
   else if (pTab === 'items') body.innerHTML = itemList();
-  else body.innerHTML = settingsForm();
+  else { body.innerHTML = settingsForm(); drawQR(); }
   if (pTab === 'acts' && editing) updateSummary();
 }
 
@@ -774,8 +1006,11 @@ function settingsForm() {
       <h3>PIN de padres</h3>
       <label>PIN (4 números) <input type="text" inputmode="numeric" maxlength="4" data-s="pin" value="${esc(s.pin)}"></label>
 
-      <h3>Pasar la agenda a otro dispositivo</h3>
-      <p class="hint">Guardá un archivo con toda la configuración y abrilo en el otro dispositivo con “Cargar archivo”.</p>
+      <h3>Sincronizar entre dispositivos</h3>
+      ${syncSection()}
+
+      <h3>Copia en archivo</h3>
+      <p class="hint">Guardá un archivo con toda la configuración, para tener una copia o pasarla a mano a otro dispositivo.</p>
       <div class="btn-row">
         <button class="btn" data-do="export">⬇ Guardar archivo</button>
         <label class="btn">⬆ Cargar archivo<input type="file" accept="application/json,.json" data-do-file="import" hidden></label>
@@ -853,6 +1088,12 @@ function onParentClick(ev) {
     case 'ask-notif':
       if (!('Notification' in window)) return toast('Este navegador no tiene notificaciones');
       Notification.requestPermission().then(() => renderParent());
+      break;
+    case 'sync-create': createFamily(); break;
+    case 'sync-join': joinFamily($('#joinCode')?.value); break;
+    case 'sync-leave': leaveFamily(); break;
+    case 'sync-copy':
+      navigator.clipboard?.writeText(joinLink(sync.code)).then(() => toast('Link copiado'), () => toast(joinLink(sync.code)));
       break;
     case 'export': {
       const data = { ...state, fired: {}, checks: {} };
@@ -1097,7 +1338,9 @@ function bind() {
 }
 
 function init() {
-  pruneOld(); save();
+  pruneOld(); saveLocal();
+  resumeSync().then(handleJoinLink);
+  window.addEventListener('hashchange', handleJoinLink);
   loadVoices();
   if ('speechSynthesis' in window) speechSynthesis.onvoiceschanged = () => { loadVoices(); if (!$('#parent').hidden && pTab === 'settings') renderParent(); };
   if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('sw.js').catch(() => {});
