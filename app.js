@@ -57,6 +57,7 @@ function defaultState() {
       { id: 'agua', name: 'Botella de agua', pic: emo('💧'), always: false },
       { id: 'campera', name: 'Campera', pic: emo('🧥'), always: false },
       { id: 'malla', name: 'Malla y toalla', pic: emo('🩱'), always: false },
+      { id: 'zapatillas', name: 'Zapatillas', pic: emo('👟'), always: true, say: 'ponerte las zapatillas' },
     ],
     activities: [
       { id: uid(), name: 'Fonoaudiología', aliases: 'fono', pic: emo('🗣️'), time: '17:00', repeat: 'weekly', days: [1, 3], date: '', mode: 'auto', travel: 20, prep: 15, items: ['agua'] },
@@ -398,7 +399,7 @@ function diaRelativo(d, now = new Date()) {
 
 function fechaLarga(d) { return `${DAYS[d.getDay()]} ${d.getDate()} de ${MONTHS[d.getMonth()]}`; }
 const nombre = () => (state.settings.name || '').trim();
-const conNombre = txt => nombre() ? `${nombre()}, ${txt}` : txt.charAt(0).toUpperCase() + txt.slice(1);
+const conNombre = txt => nombre() ? `${nombre()}, ${txt}` : txt.replace(/^(¡?)(.)/, (_, a, b) => a + b.toUpperCase());
 
 /* ---------- Voz (hablar) ---------- */
 let voices = [];
@@ -679,15 +680,26 @@ function checksFor(occ, test) {
   return bag[occ.key] || (bag[occ.key] = []);
 }
 
+// Frase de acción de una cosa ("ponerte las zapatillas"), sin punto final.
+const itemSay = i => (i.say || '').trim().replace(/[.!¡]+$/, '');
+
 function alertSpeech(occ, stage) {
   const now = new Date();
-  const items = itemsFor(occ.a).map(i => i.name.toLowerCase());
-  const lleva = items.length ? ` Fijate si tenés: ${listJoin(items)}.` : '';
+  const its = itemsFor(occ.a);
+  const all = its.map(i => i.name.toLowerCase());
   const mode = MODES[occ.a.mode]?.phrase || '';
   if (stage === 'prep') {
     const falta = occ.leave > now ? ` Salimos en ${duracion(occ.leave - now)}.` : '';
-    return conNombre(`es hora de alistarte para ${occ.a.name}.${falta} ${mode}.${lleva}`);
+    // Las cosas con "qué decirle" se dicen como acciones; las demás, como lista.
+    const acciones = its.filter(itemSay).map(itemSay);
+    const resto = its.filter(i => !itemSay(i)).map(i => i.name.toLowerCase());
+    const lista = resto.length ? ` Fijate si tenés: ${listJoin(resto)}.` : '';
+    const inicio = acciones.length
+      ? conNombre(`es hora de ${listJoin(acciones)}. Vamos a ${occ.a.name}.`)
+      : conNombre(`es hora de alistarte para ${occ.a.name}.`);
+    return `${inicio}${falta} ${mode}.${lista}`;
   }
+  const lleva = all.length ? ` Fijate si tenés: ${listJoin(all)}.` : '';
   return conNombre(`¡es hora de salir para ${occ.a.name}! ${mode}.${lleva}`);
 }
 
@@ -959,11 +971,15 @@ function updateSummary() {
 function itemList() {
   return `
     <p class="hint">Estas son las cosas que puede tener que revisar antes de salir. Las marcadas “Siempre” aparecen en todos los avisos; las demás se eligen en cada actividad.</p>
+    <p class="hint">“Qué decirle” es opcional: si escribís una acción, como “ponerte las zapatillas”, el aviso de alistarse dice “Es hora de ponerte las zapatillas”. Si lo dejás vacío, solo la nombra en la lista de cosas para llevar.</p>
     <div class="list">
       ${state.items.map(i => `
         <div class="row">
           <button data-do="pick-item-pic" data-id="${i.id}" aria-label="Cambiar imagen">${picHTML(i.pic)}</button>
-          <div class="grow"><input type="text" data-item-name="${i.id}" value="${esc(i.name)}" aria-label="Nombre"></div>
+          <div class="grow item-fields">
+            <input type="text" data-item-name="${i.id}" value="${esc(i.name)}" aria-label="Nombre">
+            <input type="text" data-item-say="${i.id}" value="${esc(i.say || '')}" placeholder="Qué decirle (opcional): ponerte las zapatillas" aria-label="Qué decirle al alistarse">
+          </div>
           <label class="switch"><input type="checkbox" data-item-always="${i.id}" ${i.always ? 'checked' : ''}> Siempre</label>
           <button class="btn small danger" data-do="del-item" data-id="${i.id}" aria-label="Eliminar">✕</button>
         </div>`).join('')}
@@ -1121,6 +1137,9 @@ function onParentInput(ev) {
   } else if (t.dataset.itemName) {
     const it = state.items.find(i => i.id === t.dataset.itemName);
     it.name = t.value; save();
+  } else if (t.dataset.itemSay) {
+    const it = state.items.find(i => i.id === t.dataset.itemSay);
+    it.say = t.value; save();
   } else if (t.dataset.itemAlways) {
     const it = state.items.find(i => i.id === t.dataset.itemAlways);
     it.always = t.checked; save();

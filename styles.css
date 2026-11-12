@@ -184,6 +184,8 @@ img.pic.photo { object-fit: cover; border-radius: 16px; }
 .row .title { font-weight: 700; }
 .row .sub { color: var(--muted); font-size: .92rem; }
 .row input[type=text] { width: 100%; }
+.item-fields { display: flex; flex-direction: column; gap: 6px; }
+.item-fields input[data-item-say] { font-size: .92rem; padding: 8px 10px; }
 
 .form { display: flex; flex-direction: column; gap: 14px; }
 .form label, .form fieldset { display: flex; flex-direction: column; gap: 6px; font-weight: 700; }
